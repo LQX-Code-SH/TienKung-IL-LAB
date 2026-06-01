@@ -29,31 +29,58 @@ inline int get_int(const std::string& json, const std::string& key) {
 }
 } // namespace tinyjson
 
+struct BridgeConfig {
+    int zmq_port = 5557;
+    std::string rgb_topic = "/sim/camera/color/image_raw";
+    std::string depth_topic = "/sim/camera/depth/image_raw";
+};
+
+static BridgeConfig parse_args(int argc, char* argv[]) {
+    BridgeConfig cfg;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if ((arg == "--zmq-port") && i + 1 < argc) {
+            cfg.zmq_port = std::stoi(argv[++i]);
+        } else if ((arg == "--rgb-topic") && i + 1 < argc) {
+            cfg.rgb_topic = argv[++i];
+        } else if ((arg == "--depth-topic") && i + 1 < argc) {
+            cfg.depth_topic = argv[++i];
+        } else if (arg == "--help") {
+            std::cout << "Usage: zmq_image_bridge [OPTIONS]\n"
+                      << "Options:\n"
+                      << "  --zmq-port PORT       ZMQ image port (default: 5557)\n"
+                      << "  --rgb-topic TOPIC     RGB image ROS2 topic (default: /sim/camera/color/image_raw)\n"
+                      << "  --depth-topic TOPIC   Depth image ROS2 topic (default: /sim/camera/depth/image_raw)\n";
+            exit(0);
+        }
+    }
+    return cfg;
+}
+
 class ZmqImageBridge : public rclcpp::Node
 {
 public:
-    ZmqImageBridge() : Node("zmq_image_bridge")
+    ZmqImageBridge(const BridgeConfig& cfg) : Node("zmq_image_bridge")
     {
         // ROS Publishers
-        // Increased queue size for high frequency
-        pub_rgb_ = this->create_publisher<sensor_msgs::msg::Image>("/sim/camera/color/image_raw", 10);
-        pub_depth_ = this->create_publisher<sensor_msgs::msg::Image>("/sim/camera/depth/image_raw", 10);
+        pub_rgb_ = this->create_publisher<sensor_msgs::msg::Image>(cfg.rgb_topic, 10);
+        pub_depth_ = this->create_publisher<sensor_msgs::msg::Image>(cfg.depth_topic, 10);
 
         // ZMQ Configuration
         context_ = zmq::context_t(1);
         subscriber_ = zmq::socket_t(context_, ZMQ_SUB);
-        
-        // Connect to the Image Publisher from Sim
-        std::string zmq_addr = "tcp://127.0.0.1:5557";
+
+        std::string zmq_addr = "tcp://127.0.0.1:" + std::to_string(cfg.zmq_port);
         RCLCPP_INFO(this->get_logger(), "Connecting to ZMQ Image Server at %s", zmq_addr.c_str());
         subscriber_.connect(zmq_addr);
-        
+
         // Subscribe to all topics (empty filter)
         subscriber_.set(zmq::sockopt::subscribe, "");
         // Only keep latest message in ZMQ buffer to avoid lag
         subscriber_.set(zmq::sockopt::rcvhwm, 2);
 
-        RCLCPP_INFO(this->get_logger(), "C++ ZMQ Image Bridge Started. High Performance Mode.");
+        RCLCPP_INFO(this->get_logger(), "C++ ZMQ Image Bridge Started (rgb: %s, depth: %s)",
+                    cfg.rgb_topic.c_str(), cfg.depth_topic.c_str());
 
         // Receive Loop
         receive_thread_ = std::thread(&ZmqImageBridge::receive_loop, this);
@@ -72,7 +99,7 @@ private:
     {
         while (rclcpp::ok() && running_) {
             zmq::message_t meta_msg, rgb_msg, depth_msg;
-            
+
             try {
                 // 1. Metadata
                 auto res = subscriber_.recv(meta_msg, zmq::recv_flags::none);
@@ -119,12 +146,10 @@ private:
         img_msg->width = w;
         img_msg->encoding = "rgb8";
         img_msg->step = w * 3;
-        
-        // Zero-copy-like: Resize and memcpy
-        // Vector resize is fast, memcpy is extremely fast in C++
-        img_msg->data.resize(rgb_msg.size()); 
+
+        img_msg->data.resize(rgb_msg.size());
         std::memcpy(img_msg->data.data(), rgb_msg.data(), rgb_msg.size());
-        
+
         pub_rgb_->publish(std::move(img_msg));
 
         // --- Publish Depth ---
@@ -134,25 +159,22 @@ private:
             depth_ros_msg->header.frame_id = "camera_link";
             depth_ros_msg->height = h;
             depth_ros_msg->width = w;
-            
-            // encoding changed to 16UC1 (uint16 mm)
-            // W * H * 2 bytes
-            depth_ros_msg->encoding = "16UC1"; 
+
+            // encoding: 16UC1 (uint16 mm), W * H * 2 bytes
+            depth_ros_msg->encoding = "16UC1";
             depth_ros_msg->step = w * 2;
-            
+
             if (depth_msg.size() == static_cast<size_t>(h * w * 2)) {
                 depth_ros_msg->data.resize(depth_msg.size());
                 std::memcpy(depth_ros_msg->data.data(), depth_msg.data(), depth_msg.size());
                 pub_depth_->publish(std::move(depth_ros_msg));
-            } else {
-                 // Size mismatch warning?
             }
         }
     }
 
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_rgb_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_depth_;
-    
+
     zmq::context_t context_;
     zmq::socket_t subscriber_;
     std::thread receive_thread_;
@@ -161,8 +183,9 @@ private:
 
 int main(int argc, char * argv[])
 {
+    BridgeConfig cfg = parse_args(argc, argv);
     rclcpp::init(argc, argv);
-    auto node = std::make_shared<ZmqImageBridge>();
+    auto node = std::make_shared<ZmqImageBridge>(cfg);
     rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;

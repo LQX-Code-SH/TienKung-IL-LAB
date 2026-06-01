@@ -1,0 +1,37 @@
+# Bridge configuration — ZMQ ports and ROS2 topics
+# Modify this file to customize topic names, ports, and QoS without code changes.
+# Topic names match the real robot for sim-to-real consistency.
+
+zmq:
+  cmd_port: 5555      # Control commands (PUB from bridge)
+  status_port: 5556   # Robot status (SUB from sim)
+  image_port: 5557    # Camera images (SUB from sim, handled by C++ bridge)
+
+topics:
+  # ---- ROS2 → Sim (bridge subscribes, forwards via ZMQ) ----
+  sub:
+    arm_cmd_pos:   {topic: "/arm/cmd_pos",   type: "CmdSetMotorPosition", qos: 1}
+    arm_cmd_ctrl:  {topic: "/arm/cmd_ctrl",  type: "CmdMotorCtrl",        qos: 1}
+    head_cmd_pos:  {topic: "/head/cmd_pos",  type: "CmdSetMotorPosition", qos: 1}
+    head_cmd_ctrl: {topic: "/head/cmd_ctrl", type: "CmdMotorCtrl",        qos: 1}
+    leg_cmd_pos:   {topic: "/leg/cmd_pos",   type: "CmdSetMotorPosition", qos: 1}
+    leg_cmd_ctrl:  {topic: "/leg/cmd_ctrl",  type: "CmdMotorCtrl",        qos: 1}
+    waist_cmd_pos: {topic: "/waist/cmd_pos", type: "CmdSetMotorPosition", qos: 1}
+    waist_cmd_ctrl: {topic: "/waist/cmd_ctrl", type: "CmdMotorCtrl", qos: 1}
+    hand_l_ctrl:   {topic: "/inspire_hand/ctrl/left_hand",  type: "JointState", qos: 1}
+    hand_r_ctrl:   {topic: "/inspire_hand/ctrl/right_hand", type: "JointState", qos: 1}
+    apple_offset:  {topic: "/scene/apple/offset", type: "Point", qos: 1}
+    cmd_reset:     {topic: "/sim/cmd_reset",      type: "Bool",  qos: 1}
+
+  # ---- Sim → ROS2 (bridge receives via ZMQ, publishes to ROS2) ----
+  # Topic names match real robot for sim-to-real consistency
+  pub:
+    arm_status:    {topic: "/arm/status",                      type: "MotorStatusMsg", qos: 10}
+    head_status:   {topic: "/head/status",                     type: "MotorStatusMsg", qos: 10}
+    leg_status:    {topic: "/leg/status",                      type: "MotorStatusMsg", qos: 10}
+    waist_status:  {topic: "/waist/status",                    type: "MotorStatusMsg", qos: 10}
+    hand_l_state:  {topic: "/inspire_hand/state/left_hand",    type: "JointState",     qos: 10}
+    hand_r_state:  {topic: "/inspire_hand/state/right_hand",   type: "JointState",     qos: 10}
+    task_dist:     {topic: "/sim/task_completed",              type: "Float32",        qos: 10}
+    image_rgb:     {topic: "/ob_camera_head/color/image_raw",  type: "Image",          qos: 10}
+    image_depth:   {topic: "/ob_camera_head/depth/image_raw",  type: "Image",          qos: 10}

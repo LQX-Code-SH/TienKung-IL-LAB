@@ -268,10 +268,10 @@ class Pick_placeNode(Node):
     self.task_completed_sub = self.create_subscription(Float32, '/sim/task_completed', self.task_completed_cb, 10)
     
     # 独立订阅各话题，各自回调更新 latest_* 变量
-    self.create_subscription(MotorStatusMsg, '/sim/arm/status', self.cmd_pos_cb, 10)
-    self.create_subscription(JointState, '/sim/inspire_hand/state/right_hand', self.hand_right_cb, 10)
-    self.create_subscription(JointState, '/sim/inspire_hand/state/left_hand', self.hand_left_cb, 10)
-    self.create_subscription(Image, '/sim/camera/color/image_raw', self.img_cb, 10)
+    self.create_subscription(MotorStatusMsg, '/arm/status', self.cmd_pos_cb, 10)
+    self.create_subscription(JointState, '/inspire_hand/state/right_hand', self.hand_right_cb, 10)
+    self.create_subscription(JointState, '/inspire_hand/state/left_hand', self.hand_left_cb, 10)
+    self.create_subscription(Image, '/ob_camera_head/color/image_raw', self.img_cb, 10)
     self.create_subscription(CmdSetMotorPosition, '/arm/cmd_pos', self.arm_cmd_pos_cb, 10)
     self.create_subscription(JointState, '/inspire_hand/ctrl/right_hand', self.hand_cmd_cb, 10)
     self.create_subscription(JointState, '/inspire_hand/ctrl/left_hand', self.hand_left_cmd_cb, 10)

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import JointState, Image, CompressedImage
+from sensor_msgs.msg import JointState, Image
 from geometry_msgs.msg import Point
 from std_msgs.msg import Bool, Float32
 try:
-    from bodyctrl_msgs.msg import MotorStatusMsg, MotorStatus, CmdSetMotorPosition,CmdMotorCtrl
+    from bodyctrl_msgs.msg import MotorStatusMsg, MotorStatus, CmdSetMotorPosition, CmdMotorCtrl
 except ImportError:
     print("[ERROR] bodyctrl_msgs not found. Please source the correct workspace.")
     class MotorStatusMsg: pass
@@ -14,43 +14,54 @@ except ImportError:
     class CmdMotorCtrl: pass
 
 import zmq
-import json
-import numpy as np
-import threading
-import queue
-import time
-import array
+import yaml
 import os
 import subprocess
-try:
-    import cv2
-except ImportError:
-    print("[WARNING] opencv-python not found. Image decoding will fail.")
-    cv2 = None
+import threading
+import time
+
+
+def load_bridge_config():
+    """Load bridge configuration from bridge_config.yaml next to this script."""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridge_config.yaml")
+    with open(config_path) as f:
+        return yaml.safe_load(f)
+
+
+# Map config type strings to ROS2 message classes
+MSG_TYPES = {
+    "CmdSetMotorPosition": CmdSetMotorPosition,
+    "CmdMotorCtrl": CmdMotorCtrl,
+    "JointState": JointState,
+    "Point": Point,
+    "Bool": Bool,
+    "MotorStatusMsg": MotorStatusMsg,
+    "Float32": Float32,
+    "Image": Image,
+}
+
 
 class TiangongRosBridge(Node):
     def __init__(self):
         super().__init__('tiangong_ros_bridge')
-        
+
+        # Load config
+        self.cfg = load_bridge_config()
+        zmq_cfg = self.cfg["zmq"]
+
         # ZMQ setup
         self.zmq_context = zmq.Context()
-        
+
         # Command PUB
         self.cmd_socket = self.zmq_context.socket(zmq.PUB)
-        self.cmd_socket.bind("tcp://*:5555")
-        
+        self.cmd_socket.bind(f"tcp://*:{zmq_cfg['cmd_port']}")
+
         # Status SUB
         self.status_socket = self.zmq_context.socket(zmq.SUB)
-        self.status_socket.connect("tcp://127.0.0.1:5556")
+        self.status_socket.connect(f"tcp://127.0.0.1:{zmq_cfg['status_port']}")
         self.status_socket.setsockopt(zmq.RCVHWM, 1)
         self.status_socket.setsockopt_string(zmq.SUBSCRIBE, "")
-        
-        # Image SUB
-        self.img_socket = self.zmq_context.socket(zmq.SUB)
-        self.img_socket.connect("tcp://127.0.0.1:5557")
-        self.img_socket.setsockopt(zmq.RCVHWM, 1)
-        self.img_socket.setsockopt_string(zmq.SUBSCRIBE, "")
-        
+
         # ID Definition
         self.ID_HEAD = [1, 2, 3]
         self.ID_ARM_L = [11, 12, 13, 14, 15, 16, 17]
@@ -78,14 +89,14 @@ class TiangongRosBridge(Node):
         }
 
         self.NAME_TO_ID = {v: k for k, v in self.ID_TO_NAME.items()}
-        
+
         self.HAND_L_MAP = {
-            1: "left_little_1_joint", # id=1 -> master joint for little finger
-            2: "left_ring_1_joint",   # id=2 -> master joint for ring finger
-            3: "left_middle_1_joint", # id=3 -> master joint for middle finger
-            4: "left_index_1_joint",  # id=4 -> master joint for index finger
-            5: "left_thumb_2_joint",  # id=5 -> master joint for thumb bend (thumb_2)
-            6: "left_thumb_1_joint"   # id=6 -> joint for thumb rotation (thumb_1)
+            1: "left_little_1_joint",
+            2: "left_ring_1_joint",
+            3: "left_middle_1_joint",
+            4: "left_index_1_joint",
+            5: "left_thumb_2_joint",
+            6: "left_thumb_1_joint"
         }
         self.HAND_R_MAP = {
             1: "right_little_1_joint",
@@ -96,41 +107,41 @@ class TiangongRosBridge(Node):
             6: "right_thumb_1_joint"
         }
 
-        # Subscriptions
-        self.create_subscription(CmdSetMotorPosition, '/arm/cmd_pos', self.cmd_pos_cb, 1)
-        self.create_subscription(CmdSetMotorPosition, '/head/cmd_pos', self.cmd_pos_cb, 1)
-        self.create_subscription(CmdSetMotorPosition, '/leg/cmd_pos', self.cmd_pos_cb, 1)
-        self.create_subscription(CmdSetMotorPosition, '/waist/cmd_pos', self.cmd_pos_cb, 1)
+        # --- Dynamic subscriptions from config ---
+        SUB_CALLBACKS = {
+            "arm_cmd_pos":   self.cmd_pos_cb,
+            "arm_cmd_ctrl":  self.cmd_ctrl_cb,
+            "head_cmd_pos":  self.cmd_pos_cb,
+            "head_cmd_ctrl": self.cmd_ctrl_cb,
+            "leg_cmd_pos":   self.cmd_pos_cb,
+            "leg_cmd_ctrl":  self.cmd_ctrl_cb,
+            "waist_cmd_pos": self.cmd_pos_cb,
+            "waist_cmd_ctrl":self.cmd_ctrl_cb,
+            "hand_l_ctrl":   lambda m: self.hand_cb(m, "left"),
+            "hand_r_ctrl":   lambda m: self.hand_cb(m, "right"),
+            "apple_offset":  self.apple_cb,
+            "cmd_reset":     self.cmd_reset_cb,
+        }
+        for key, spec in self.cfg["topics"]["sub"].items():
+            msg_type = MSG_TYPES[spec["type"]]
+            cb = SUB_CALLBACKS.get(key)
+            if cb:
+                self.create_subscription(msg_type, spec["topic"], cb, spec.get("qos", 1))
 
-        self.create_subscription(CmdMotorCtrl, '/arm/cmd_ctrl', self.cmd_ctrl_cb, 1)
-        self.create_subscription(CmdMotorCtrl, '/head/cmd_ctrl', self.cmd_ctrl_cb, 1)
-        self.create_subscription(CmdMotorCtrl, '/leg/cmd_ctrl', self.cmd_ctrl_cb, 1)
-        self.create_subscription(CmdMotorCtrl, '/waist/cmd_ctrl', self.cmd_ctrl_cb, 1)
+        # --- Dynamic publishers from config ---
+        self.pubs = {}
+        for key, spec in self.cfg["topics"]["pub"].items():
+            # image_rgb and image_depth are handled by C++ bridge, skip here
+            if key in ("image_rgb", "image_depth"):
+                continue
+            msg_type = MSG_TYPES[spec["type"]]
+            self.pubs[key] = self.create_publisher(msg_type, spec["topic"], spec.get("qos", 10))
 
-        self.create_subscription(JointState, '/inspire_hand/ctrl/left_hand', lambda m: self.hand_cb(m,"left"), 1)
-        self.create_subscription(JointState, '/inspire_hand/ctrl/right_hand', lambda m: self.hand_cb(m,"right"), 1)
-
-        self.create_subscription(Point, '/scene/apple/offset', self.apple_cb, 1)
-        self.create_subscription(Bool, '/sim/cmd_reset', self.cmd_reset_cb, 1)
-        
-        # Publishers
-        self.pub_arm_status = self.create_publisher(MotorStatusMsg, '/sim/arm/status', 10)
-        self.pub_head_status = self.create_publisher(MotorStatusMsg, '/sim/head/status', 10)
-        self.pub_leg_status = self.create_publisher(MotorStatusMsg, '/sim/leg/status', 10)
-        self.pub_waist_status = self.create_publisher(MotorStatusMsg, '/sim/waist/status', 10)
-        self.pub_hand_l_status = self.create_publisher(JointState, '/sim/inspire_hand/state/left_hand', 10)
-        self.pub_hand_r_status = self.create_publisher(JointState, '/sim/inspire_hand/state/right_hand', 10)
-        self.pub_task_dist = self.create_publisher(Float32, '/sim/task_completed', 10)
-        
         # Threaded polling
         self._running = True
         self._poll_thread = threading.Thread(target=self._poll_loop)
         self._poll_thread.start()
         self.get_logger().info("Tiangong ROS 2 Bridge (Control Only) Started")
-
-        # image receive rate measurement
-        self._img_last_print = time.perf_counter()
-        self._img_count = 0
 
         # Start C++ Image Bridge (skip with env var DISABLE_CPP_IMAGE_BRIDGE=1)
         self.cpp_bridge_process = None
@@ -172,9 +183,18 @@ class TiangongRosBridge(Node):
             self.get_logger().error("C++ Bridge executable not found. Image publishing unavailable.")
             return
 
-        self.get_logger().info(f"Starting C++ Bridge: {executable} ...")
+        # Pass config values to C++ bridge via CLI args
+        pub_cfg = self.cfg["topics"]["pub"]
+        zmq_cfg = self.cfg["zmq"]
+        args = [
+            executable,
+            "--zmq-port",    str(zmq_cfg["image_port"]),
+            "--rgb-topic",   pub_cfg["image_rgb"]["topic"],
+            "--depth-topic", pub_cfg["image_depth"]["topic"],
+        ]
+        self.get_logger().info(f"Starting C++ Bridge: {' '.join(args)}")
         try:
-            self.cpp_bridge_process = subprocess.Popen([executable], cwd=script_dir)
+            self.cpp_bridge_process = subprocess.Popen(args, cwd=script_dir)
         except Exception as e:
             self.get_logger().error(f"Failed to start C++ Bridge: {e}")
             self.cpp_bridge_process = None
@@ -208,12 +228,7 @@ class TiangongRosBridge(Node):
         self.cmd_socket.send_json(current_action)
 
     def apple_cb(self, msg):
-        # Forward apple offset command
-        # msg is geometry_msgs/Point
-        cmd = {
-            "apple_offset": [msg.x, msg.y]
-        }
-        self.cmd_socket.send_json(cmd)
+        self.cmd_socket.send_json({"apple_offset": [msg.x, msg.y]})
 
     def cmd_reset_cb(self, msg):
         if msg.data:
@@ -222,9 +237,9 @@ class TiangongRosBridge(Node):
     def _poll_loop(self):
         poller = zmq.Poller()
         poller.register(self.status_socket, zmq.POLLIN)
-        
+
         while self._running:
-            socks = dict(poller.poll(timeout=1)) # Poll frequently
+            socks = dict(poller.poll(timeout=1))
             if self.status_socket in socks:
                 try:
                     msg = self.status_socket.recv_json(flags=zmq.NOBLOCK)
@@ -232,11 +247,9 @@ class TiangongRosBridge(Node):
                     if "task_dist" in msg:
                         f = Float32()
                         f.data = float(msg["task_dist"])
-                        self.pub_task_dist.publish(f)
+                        self.pubs["task_dist"].publish(f)
                 except Exception as e:
-                    # self.get_logger().error(f"Error in poll loop: {e}")
                     pass
-           
 
     def publish_status(self, data):
         # Support both old list format and new dict format
@@ -245,13 +258,12 @@ class TiangongRosBridge(Node):
             finger_percentages = data.get("finger_percentages", {})
             vel_map = dict(zip(data["joint_names"], data["joint_vel"])) if "joint_vel" in data else {}
         else:
-            # Assume flat dict {name: value}
             pos_map = data
             finger_percentages = {}
-            vel_map = {} # Velocity might not be present in flat dict
-        
+            vel_map = {}
+
         header = self.get_clock().now().to_msg()
-        
+
         def create_motor_msg(id_range):
             m_msg = MotorStatusMsg()
             m_msg.header.stamp = header
@@ -262,41 +274,39 @@ class TiangongRosBridge(Node):
                     s.pos = float(pos_map[name])
                     m_msg.status.append(s)
             return m_msg
-            
+
         def create_hand_msg(hand_map):
             h_msg = JointState()
             h_msg.header.stamp = header
-            h_msg.name = [] # Will be strings "1"..."6"
+            h_msg.name = []
             h_msg.position = []
             h_msg.velocity = []
-            
-            # Use IDs 1 to 6 specifically
+
             for i in range(1, 7):
                 sim_name = hand_map.get(i)
                 h_msg.name.append(str(i))
-                
+
                 pos_val = 0.0
                 vel_val = 0.0
-                
+
                 if sim_name and sim_name in finger_percentages:
                     pos_val = float(finger_percentages[sim_name])
                     if sim_name in vel_map:
                         vel_val = float(vel_map[sim_name])
-                    
+
                 h_msg.position.append(pos_val)
                 h_msg.velocity.append(vel_val)
                 h_msg.effort.append(0.0)
-                
+
             return h_msg
 
-        self.pub_arm_status.publish(create_motor_msg(self.ID_ARM_L + self.ID_ARM_R ))
-        self.pub_head_status.publish(create_motor_msg(self.ID_HEAD))
-        self.pub_leg_status.publish(create_motor_msg(self.ID_LEG_L + self.ID_LEG_R))
-        self.pub_waist_status.publish(create_motor_msg(self.ID_WAIST))
-        
-        self.pub_hand_l_status.publish(create_hand_msg(self.HAND_L_MAP))
-        self.pub_hand_r_status.publish(create_hand_msg(self.HAND_R_MAP))
+        self.pubs["arm_status"].publish(create_motor_msg(self.ID_ARM_L + self.ID_ARM_R))
+        self.pubs["head_status"].publish(create_motor_msg(self.ID_HEAD))
+        self.pubs["leg_status"].publish(create_motor_msg(self.ID_LEG_L + self.ID_LEG_R))
+        self.pubs["waist_status"].publish(create_motor_msg(self.ID_WAIST))
 
+        self.pubs["hand_l_state"].publish(create_hand_msg(self.HAND_L_MAP))
+        self.pubs["hand_r_state"].publish(create_hand_msg(self.HAND_R_MAP))
 
     def stop(self):
         self._running = False

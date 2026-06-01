@@ -12,7 +12,7 @@ if [ -z "$ROS_DISTRO" ]; then
         setup="/opt/ros/${distro}/setup.bash"
         if [ -f "$setup" ]; then
             echo "Sourcing ROS 2 ${distro}..."
-            source "$setup"
+            source "$setup" || true
             break
         fi
     done
@@ -25,13 +25,21 @@ fi
 
 echo "Using ROS_DISTRO=${ROS_DISTRO}"
 
-# ---- 2. Install missing dependencies (works with or without sudo) ----
+# ---- 2. Clean stale build if ROS distro changed ----
+if [ -f "${BUILD_DIR}/ros_distro.txt" ]; then
+    if [ "$(cat "${BUILD_DIR}/ros_distro.txt")" != "$ROS_DISTRO" ]; then
+        echo "ROS_DISTRO changed, cleaning build directory..."
+        rm -rf "$BUILD_DIR"
+    fi
+fi
+
+# ---- 3. Install missing dependencies (works with or without sudo) ----
 MISSING_PKGS=()
 if ! pkg-config --exists libzmq 2>/dev/null; then
     MISSING_PKGS+=(libzmq3-dev)
 fi
-if ! command -v g++ &>/dev/null && ! command -v c++ &>/dev/null; then
-    MISSING_PKGS+=(g++ make)
+if ! command -v cmake &>/dev/null; then
+    MISSING_PKGS+=(cmake g++ make)
 fi
 
 if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
@@ -47,14 +55,15 @@ if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
     fi
 fi
 
-# ---- 3. Build with CMake (handles all ROS 2 link deps automatically) ----
+# ---- 4. Build with CMake (handles all ROS 2 link deps automatically) ----
 echo "Configuring with CMake..."
 mkdir -p "$BUILD_DIR"
+echo "$ROS_DISTRO" > "${BUILD_DIR}/ros_distro.txt"
 cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release 2>&1
 
 echo "Compiling..."
 cmake --build "$BUILD_DIR" -j"$(nproc)" 2>&1
 
-# ---- 4. Copy executable next to script ----
+# ---- 5. Copy executable next to script ----
 cp -f "${BUILD_DIR}/zmq_image_bridge" "${SCRIPT_DIR}/zmq_image_bridge"
 echo "Build successful: ${SCRIPT_DIR}/zmq_image_bridge"

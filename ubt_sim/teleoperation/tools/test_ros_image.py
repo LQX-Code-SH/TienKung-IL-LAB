@@ -8,7 +8,7 @@ Usage:
   # 真机
   ROS_DOMAIN_ID=0 /usr/bin/python3 tool/test_ros_image.py
   # 仿真
-  ROS_DOMAIN_ID=146 /usr/bin/python3 tool/test_ros_image.py --topic /sim/camera/color/image_raw
+  ROS_DOMAIN_ID=146 /usr/bin/python3 tool/test_ros_image.py
 """
 
 import argparse
