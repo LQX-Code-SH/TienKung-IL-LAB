@@ -6,6 +6,7 @@
 #include <zmq.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <image_transport/image_transport.hpp>
 
 // Minimal JSON parser — extracts integer values for known keys.
 // Avoids nlohmann-json system dependency for a trivial {"width":N,"height":N} payload.
@@ -31,8 +32,8 @@ inline int get_int(const std::string& json, const std::string& key) {
 
 struct BridgeConfig {
     int zmq_port = 5557;
-    std::string rgb_topic = "/sim/camera/color/image_raw";
-    std::string depth_topic = "/sim/camera/depth/image_raw";
+    std::string rgb_topic = "/ob_camera_head/color/image_raw";
+    std::string depth_topic = "/ob_camera_head/depth/image_raw";
 };
 
 static BridgeConfig parse_args(int argc, char* argv[]) {
@@ -49,8 +50,11 @@ static BridgeConfig parse_args(int argc, char* argv[]) {
             std::cout << "Usage: zmq_image_bridge [OPTIONS]\n"
                       << "Options:\n"
                       << "  --zmq-port PORT       ZMQ image port (default: 5557)\n"
-                      << "  --rgb-topic TOPIC     RGB image ROS2 topic (default: /sim/camera/color/image_raw)\n"
-                      << "  --depth-topic TOPIC   Depth image ROS2 topic (default: /sim/camera/depth/image_raw)\n";
+                      << "  --rgb-topic TOPIC     RGB image ROS2 topic (default: /ob_camera_head/color/image_raw)\n"
+                      << "  --depth-topic TOPIC   Depth image ROS2 topic (default: /ob_camera_head/depth/image_raw)\n"
+                      << "\nCompressed topics are auto-published by image_transport plugins:\n"
+                      << "  <rgb-topic>/compressed          (JPEG, requires compressed_image_transport)\n"
+                      << "  <depth-topic>/compressedDepth   (PNG, requires compressed_depth_image_transport)\n";
             exit(0);
         }
     }
@@ -62,9 +66,11 @@ class ZmqImageBridge : public rclcpp::Node
 public:
     ZmqImageBridge(const BridgeConfig& cfg) : Node("zmq_image_bridge")
     {
-        // ROS Publishers
-        pub_rgb_ = this->create_publisher<sensor_msgs::msg::Image>(cfg.rgb_topic, 10);
-        pub_depth_ = this->create_publisher<sensor_msgs::msg::Image>(cfg.depth_topic, 10);
+        // Use image_transport — auto-publishes /compressed and /compressedDepth sub-topics
+        rmw_qos_profile_t qos = rmw_qos_profile_default;
+        qos.depth = 10;
+        pub_rgb_ = image_transport::create_publisher(this, cfg.rgb_topic, qos);
+        pub_depth_ = image_transport::create_publisher(this, cfg.depth_topic, qos);
 
         // ZMQ Configuration
         context_ = zmq::context_t(1);
@@ -139,9 +145,9 @@ private:
         auto current_time = this->now();
 
         // --- Publish RGB ---
-        auto img_msg = std::make_unique<sensor_msgs::msg::Image>();
+        auto img_msg = std::make_shared<sensor_msgs::msg::Image>();
         img_msg->header.stamp = current_time;
-        img_msg->header.frame_id = "camera_link";
+        img_msg->header.frame_id = "ob_camera_head_color_optical_frame";
         img_msg->height = h;
         img_msg->width = w;
         img_msg->encoding = "rgb8";
@@ -150,13 +156,13 @@ private:
         img_msg->data.resize(rgb_msg.size());
         std::memcpy(img_msg->data.data(), rgb_msg.data(), rgb_msg.size());
 
-        pub_rgb_->publish(std::move(img_msg));
+        pub_rgb_.publish(img_msg);
 
         // --- Publish Depth ---
         if (has_depth && depth_msg.size() > 0) {
-            auto depth_ros_msg = std::make_unique<sensor_msgs::msg::Image>();
+            auto depth_ros_msg = std::make_shared<sensor_msgs::msg::Image>();
             depth_ros_msg->header.stamp = current_time;
-            depth_ros_msg->header.frame_id = "camera_link";
+            depth_ros_msg->header.frame_id = "ob_camera_head_depth_optical_frame";
             depth_ros_msg->height = h;
             depth_ros_msg->width = w;
 
@@ -167,13 +173,13 @@ private:
             if (depth_msg.size() == static_cast<size_t>(h * w * 2)) {
                 depth_ros_msg->data.resize(depth_msg.size());
                 std::memcpy(depth_ros_msg->data.data(), depth_msg.data(), depth_msg.size());
-                pub_depth_->publish(std::move(depth_ros_msg));
+                pub_depth_.publish(depth_ros_msg);
             }
         }
     }
 
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_rgb_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_depth_;
+    image_transport::Publisher pub_rgb_;
+    image_transport::Publisher pub_depth_;
 
     zmq::context_t context_;
     zmq::socket_t subscriber_;

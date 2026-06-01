@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-ros-base \
     ros-humble-image-transport \
+    ros-humble-image-transport-plugins \
     ros-humble-cv-bridge \
     ros-humble-message-filters \
     python3-pip \

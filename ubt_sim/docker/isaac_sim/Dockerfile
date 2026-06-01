@@ -11,8 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-ros-base \
     ros-humble-image-transport \
+    ros-humble-image-transport-plugins \
     ros-humble-cv-bridge \
     ros-humble-message-filters \
+    ros-humble-rqt-image-view \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- ROS2 子进程所需 Python 3.10 包 ----

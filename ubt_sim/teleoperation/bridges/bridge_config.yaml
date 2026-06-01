@@ -33,5 +33,8 @@ topics:
     hand_l_state:  {topic: "/inspire_hand/state/left_hand",    type: "JointState",     qos: 10}
     hand_r_state:  {topic: "/inspire_hand/state/right_hand",   type: "JointState",     qos: 10}
     task_dist:     {topic: "/sim/task_completed",              type: "Float32",        qos: 10}
-    image_rgb:     {topic: "/ob_camera_head/color/image_raw",  type: "Image",          qos: 10}
-    image_depth:   {topic: "/ob_camera_head/depth/image_raw",  type: "Image",          qos: 10}
+    # Image topics use image_transport — compressed sub-topics are auto-published:
+    #   /ob_camera_head/color/image_raw/compressed         (JPEG, needs ros-humble-compressed-image-transport)
+    #   /ob_camera_head/depth/image_raw/compressedDepth    (PNG, needs ros-humble-compressed-depth-image-transport)
+    image_rgb:     {topic: "/ob_camera_head/color/image_raw",  type: "Image", compressed: true}
+    image_depth:   {topic: "/ob_camera_head/depth/image_raw",  type: "Image", compressed: true}
