@@ -1,3 +1,4 @@
 [submodule "ubt_IL/lerobot"]
 	path = ubt_IL/lerobot
-	url = https://github.com/huggingface/lerobot.git
+	url = https://github.com/LQX-Code-SH/lerobot.git
+	branch = tienkung-patches
