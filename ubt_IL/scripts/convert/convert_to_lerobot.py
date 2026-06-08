@@ -168,6 +168,18 @@ def process_episode(
                             cv2.resize(cv2.imdecode(img, cv2.IMREAD_COLOR_RGB), image_size)
                             for img in raw
                         ]
+                    elif encoding == "png_depth":
+                        # uint16 millimeter depth -> 3-channel uint8 video frame
+                        # (Pick_up_the_apple_all 约定：复制到 3 通道，走 mp4 编码，is_depth_map=false)
+                        depth_clip_mm = field_spec.get("depth_clip_mm", 8000)
+                        images = []
+                        for buf in raw:
+                            d16 = cv2.imdecode(np.frombuffer(buf, np.uint8), cv2.IMREAD_UNCHANGED)
+                            d16 = cv2.resize(d16, image_size, interpolation=cv2.INTER_NEAREST)
+                            # 量化：[0, clip_mm] -> [0, 255]，超出 clip 的远处截断到 255
+                            d8 = np.clip(d16, 0, depth_clip_mm).astype(np.float32)
+                            d8 = (d8 * (255.0 / depth_clip_mm)).astype(np.uint8)
+                            images.append(np.stack([d8, d8, d8], axis=-1))  # (H, W, 3)
                     elif encoding == "raw":
                         images = [
                             cv2.resize(img, image_size)

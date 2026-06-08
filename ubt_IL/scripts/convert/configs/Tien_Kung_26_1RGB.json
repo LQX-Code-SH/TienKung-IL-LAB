@@ -11,6 +11,18 @@
             "has_audio": false
         }
     },
+    "observation.images.camera_head_depth": {
+        "dtype": "video",
+        "shape": [360, 640, 3],
+        "names": ["height", "width", "channel"],
+        "video_info": {
+            "video.fps": 30.0,
+            "video.codec": "libx264",
+            "video.pix_fmt": "yuv420p",
+            "video.is_depth_map": false,
+            "has_audio": false
+        }
+    },
     "observation.state": {
         "dtype": "float32",
         "shape": [26]
@@ -42,20 +54,26 @@
     "hdf5_mapping": {
         "observation.state": [
             "puppet/arm_left_position_align/data",
-            "puppet/end_effector_left_position_align/data",
             "puppet/arm_right_position_align/data",
+            "puppet/end_effector_left_position_align/data",
             "puppet/end_effector_right_position_align/data"
         ],
         "action": [
             "action/arm_left_position_align/data",
-            "action/end_effector_left_position_align/data",
             "action/arm_right_position_align/data",
+            "action/end_effector_left_position_align/data",
             "action/end_effector_right_position_align/data"
         ],
         "observation.images.camera_head": {
             "hdf5_key": "camera_observations/color_images/camera_head",
             "encoding": "jpeg",
             "image_size": [640, 360]
+        },
+        "observation.images.camera_head_depth": {
+            "hdf5_key": "camera_observations/depth_images/camera_head",
+            "encoding": "png_depth",
+            "image_size": [640, 360],
+            "depth_clip_mm": 4000
         }
     }
 }

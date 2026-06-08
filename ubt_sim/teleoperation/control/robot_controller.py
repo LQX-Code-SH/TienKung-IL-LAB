@@ -93,6 +93,7 @@ class RobotController(Node):
         self.latest_action_hand_right = [1.0] * 6
         self.latest_action_hand_left = [1.0] * 6
         self.latest_img = None
+        self.latest_depth = None  # uint16 毫米图（H, W）
         self.latest_task_dist = 1000.0
 
     # ──────────────── 配置加载 ────────────────
@@ -128,6 +129,7 @@ class RobotController(Node):
                 ("sub", "hand_r_state"): "/inspire_hand/state/right_hand",
                 ("sub", "hand_l_state"): "/inspire_hand/state/left_hand",
                 ("sub", "image_rgb"): "/ob_camera_head/color/image_raw",
+                ("sub", "image_depth"): "/ob_camera_head/depth/image_raw",
                 ("sub", "arm_cmd_pos"): "/arm/cmd_pos",
                 ("sub", "hand_r_ctrl"): "/inspire_hand/ctrl/right_hand",
                 ("sub", "hand_l_ctrl"): "/inspire_hand/ctrl/left_hand",
@@ -150,6 +152,7 @@ class RobotController(Node):
         self.create_subscription(JointState, self._get_topic("sub", "hand_r_state"), self._hand_right_cb, 10)
         self.create_subscription(JointState, self._get_topic("sub", "hand_l_state"), self._hand_left_cb, 10)
         self.create_subscription(Image, self._get_topic("sub", "image_rgb"), self._image_cb, 10)
+        self.create_subscription(Image, self._get_topic("sub", "image_depth"), self._depth_cb, 10)
         self.create_subscription(CmdSetMotorPosition, self._get_topic("sub", "arm_cmd_pos"), self._arm_cmd_cb, 10)
         self.create_subscription(JointState, self._get_topic("sub", "hand_r_ctrl"), self._hand_cmd_right_cb, 10)
         self.create_subscription(JointState, self._get_topic("sub", "hand_l_ctrl"), self._hand_cmd_left_cb, 10)
@@ -519,6 +522,25 @@ class RobotController(Node):
                 self.latest_img = img[..., ::-1]
         except Exception as e:
             self.get_logger().error(f"Image decode error: {e}")
+
+    def _depth_cb(self, msg):
+        """解码深度图，统一存为 uint16 毫米（H, W）。
+
+        Isaac Sim 通常发 32FC1 米；真机 Orbbec 发 16UC1 毫米。两者都统一到 uint16 mm。
+        """
+        try:
+            if msg.encoding == "16UC1":
+                depth = np.frombuffer(msg.data, dtype=np.uint16).reshape(msg.height, msg.width)
+                self.latest_depth = depth.copy()
+            elif msg.encoding == "32FC1":
+                depth_m = np.frombuffer(msg.data, dtype=np.float32).reshape(msg.height, msg.width)
+                # 米 → 毫米，clip 到 uint16 范围（[0, 65.535m]）
+                depth_mm = np.clip(depth_m * 1000.0, 0, 65535).astype(np.uint16)
+                self.latest_depth = depth_mm
+            else:
+                self.get_logger().warn(f"Unsupported depth encoding: {msg.encoding}")
+        except Exception as e:
+            self.get_logger().error(f"Depth decode error: {e}")
 
     # ──────────────── 控制循环 ────────────────
 
