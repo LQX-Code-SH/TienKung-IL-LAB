@@ -2,7 +2,7 @@
 
 ## Architecture Overview
 
-Dual-process bridge design: LeRobot (Python 3.12) communicates with `ros2_deploy_bridge.py` (Bridge2, Python 3.10) via ZMQ. Bridge2 interfaces with the TienKung robot hardware via ROS2 DDS. Images come from a separate ImageServer process.
+Dual-process bridge design: LeRobot (Python 3.12) communicates with `tienkung/ros2_deploy_bridge.py` (Bridge2, Python 3.10) via ZMQ. Bridge2 interfaces with the TienKung robot hardware via ROS2 DDS. Images come from a separate ImageServer process.
 
 ```
 LeRobot Inference (Python 3.12)       Bridge2 (Python 3.10)

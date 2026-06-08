@@ -51,8 +51,7 @@ RUN /usr/bin/python3 -m pip install --upgrade pip \
 # Fast-DDS config: disable shared memory (fixes ROS2 data delivery inside Docker)
 COPY docker/fastdds_no_shm.xml /opt/fastdds_no_shm.xml
 
-# Bridge2 + entrypoint
-COPY docker/ros2_deploy_bridge.py /opt/ros2_deploy_bridge.py
+# Bridge2 is bind-mounted via /ubt_IL/tienkung/ros2_deploy_bridge.py (no COPY needed)
 COPY docker/entrypoint.sh /opt/entrypoint.sh
 RUN chmod +x /opt/entrypoint.sh
 

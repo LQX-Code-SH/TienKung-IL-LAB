@@ -8,6 +8,7 @@ Joint layout is configured via TienKungRobotConfig.all_joints (default: arms_the
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import threading
@@ -21,8 +22,12 @@ from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from .config_tienkung import TienKungRobotConfig
+from .hand_utils import clip_hand_value
 
 logger = logging.getLogger(__name__)
+
+# Path where _start_bridge() writes the config JSON for external scripts to read.
+_BRIDGE_CONFIG_PATH = "/tmp/tienkung_bridge_config.json"
 
 
 class TienKungRobot(Robot):
@@ -140,20 +145,26 @@ class TienKungRobot(Robot):
         subprocess.run(["pkill", "-f", "ros2_deploy_bridge.py"], check=False)
         time.sleep(0.5)
 
+        config_json = json.dumps(self.config.to_bridge_config())
         cmd = [
             "/usr/bin/python3", self.config.bridge_script,
-            "--zmq_cmd_port", str(self.config.zmq_cmd_port),
-            "--zmq_status_port", str(self.config.zmq_status_port),
-            "--ros_namespace", self.config.ros_namespace,
-            "--cmd_namespace", self.config.cmd_namespace,
+            "--config", config_json,
         ]
 
-        logger.info("Starting Bridge2: %s", " ".join(cmd))
+        logger.info("Starting Bridge2: %s --config <json>", self.config.bridge_script)
         self._bridge_process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+
+        # Write config to a known location for external scripts (replay.py, reset.py)
+        try:
+            with open(_BRIDGE_CONFIG_PATH, "w") as f:
+                f.write(config_json)
+        except OSError:
+            logger.warning("Failed to write bridge config to %s", _BRIDGE_CONFIG_PATH)
+
         # Give bridge time to bind ZMQ ports
         time.sleep(1.0)
 
@@ -238,17 +249,17 @@ class TienKungRobot(Robot):
             logger.warning("Action send dropped: ZMQ send buffer full (SNDHWM=1)")
 
         # Return the actual action sent (after clipping).
-        # Apply Inspire hand clip to returned values so they match what Bridge2
-        # will send to the robot (clip [0,1], subtract 0.2 if < 0.9, round to 0.1).
+        # Apply hand clip to returned values so they match what Bridge2
+        # will send to the robot.
         sent_action: RobotAction = {}
         for i, name in enumerate(self._left_arm_joints):
             sent_action[name] = left_arm[i]
         for i, name in enumerate(self._left_hand_joints):
-            sent_action[name] = self._inspire_clip_value(left_hand[i])
+            sent_action[name] = clip_hand_value(left_hand[i], self.config.hand_type)
         for i, name in enumerate(self._right_arm_joints):
             sent_action[name] = right_arm[i]
         for i, name in enumerate(self._right_hand_joints):
-            sent_action[name] = self._inspire_clip_value(right_hand[i])
+            sent_action[name] = clip_hand_value(right_hand[i], self.config.hand_type)
         return sent_action
 
     @staticmethod
@@ -263,30 +274,16 @@ class TienKungRobot(Robot):
             result.append(c + diff)
         return result
 
-    @staticmethod
-    def _inspire_clip_value(pos: float) -> float:
-        """Apply Inspire hand clip logic matching Bridge2's _publish_hand_command.
-
-        clip [0,1], subtract 0.2 if < 0.9, round to 1 decimal.
-        """
-        import numpy as np
-
-        pos = float(np.clip(pos, 0.0, 1.0))
-        pos = pos - 0.2 if pos < 0.9 else pos
-        return round(pos, 1)
-
     @check_if_not_connected
     def disconnect(self) -> None:
         # Optionally return to home position
         if self.config.disable_torque_on_disconnect and self._state_ready.is_set():
             logger.info("Returning to home position...")
-            # Hand values [1,1,1,1,1,0] open the Inspire hand (matching reset.py).
-            # After Bridge2 Inspire clip: clip(1.0)=1.0, 1.0>=0.9 → no subtract → hand open.
             home_action = {
                 "left_arm": self.config.home_position[:len(self._left_arm_joints)],
-                "left_hand": [1.0, 1.0, 1.0, 1.0, 1.0, 0.0],
+                "left_hand": list(self.config.hand_open_position),
                 "right_arm": self.config.home_position[len(self._left_arm_joints):len(self._left_arm_joints) + len(self._right_arm_joints)],
-                "right_hand": [1.0, 1.0, 1.0, 1.0, 1.0, 0.0],
+                "right_hand": list(self.config.hand_open_position),
                 "ts": time.time(),
             }
             try:

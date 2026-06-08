@@ -16,6 +16,7 @@
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -73,16 +74,50 @@ DEFAULT_LAYOUT_BY_ROBOT: Dict[str, str] = {
     "tienkung": "interleaved",
 }
 
-# 电机 ID（与 docker/ros2_deploy_bridge.py 一致）
-LEFT_ARM_MOTOR_IDS = list(range(11, 18))   # 11..17
-RIGHT_ARM_MOTOR_IDS = list(range(21, 28))  # 21..27
-
-# 臂运动参数（对齐 Bridge2 的运行时设定，不沿用 reset.py 给复位的 0.2/5.0）
-ARM_SPEED = 0.5
-ARM_CURRENT = 5.0
-
 # 默认数据集路径：脚本位于 ubt_IL/scripts/deploy/replay.py
 DEFAULT_DATASET = Path(__file__).resolve().parents[2] / "dataset" / "Pick_up_tiangong_all"
+
+# 配置文件路径（由 TienKungRobot._start_bridge() 写出）
+DEFAULT_CONFIG_FILE = "/tmp/tienkung_bridge_config.json"
+
+
+# ── Inspire hand clip logic ──────────────────────────────────────────────────
+# IMPORTANT: This logic must match hand_utils.inspire_clip_position() in the
+# plugin package (lerobot_robot_tienkung/hand_utils.py). If you change it here,
+# change it there too.
+
+def inspire_clip_position(position: list) -> list:
+    """Inspire hand clip: clip [0,1], subtract 0.2 if < 0.9, round to 1 decimal."""
+    position = [float(np.clip(pos, 0.0, 1.0)) for pos in position]
+    position = [pos - 0.2 if pos < 0.9 else pos for pos in position]
+    return [round(pos, 1) for pos in position]
+
+
+def load_bridge_config(config_file: str | None = None) -> dict:
+    """Load config written by TienKungRobot._start_bridge().
+
+    Falls back to hardcoded defaults if the config file is not available,
+    allowing standalone operation without the LeRobot process running.
+    """
+    path = config_file or DEFAULT_CONFIG_FILE
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"[replay] Warning: failed to read {path}: {e}, using defaults", file=sys.stderr)
+
+    # Fallback defaults (matching constants.py in the plugin)
+    return {
+        "left_arm_motor_ids": list(range(11, 18)),
+        "right_arm_motor_ids": list(range(21, 28)),
+        "arm_speed": 0.5,
+        "arm_current": 5.0,
+        "hand_type": "inspire",
+        "topic_arm_cmd": "/arm/cmd_pos",
+        "topic_left_hand_cmd": "/inspire_hand/ctrl/left_hand",
+        "topic_right_hand_cmd": "/inspire_hand/ctrl/right_hand",
+    }
 
 
 def detect_layout(info: dict) -> Tuple[str, Dict[str, slice]]:
@@ -142,24 +177,31 @@ def load_episode_actions(dataset_root: Path, episode: int) -> Tuple[np.ndarray, 
     return actions, info
 
 
-def make_arm_msg(left_arm, right_arm) -> CmdSetMotorPosition:
-    """把左右臂各 7 维拼成一条 CmdSetMotorPosition。"""
+def make_arm_msg(left_arm, right_arm, cfg: dict) -> CmdSetMotorPosition:
+    """把左右臂各 N 维拼成一条 CmdSetMotorPosition。"""
+    left_motor_ids = cfg["left_arm_motor_ids"]
+    right_motor_ids = cfg["right_arm_motor_ids"]
+    arm_speed = cfg.get("arm_speed", 0.5)
+    arm_current = cfg.get("arm_current", 5.0)
+
     msg = CmdSetMotorPosition()
-    for motor_id, val in zip(LEFT_ARM_MOTOR_IDS, left_arm):
-        msg.cmds.append(SetMotorPosition(name=motor_id, pos=float(val), spd=ARM_SPEED, cur=ARM_CURRENT))
-    for motor_id, val in zip(RIGHT_ARM_MOTOR_IDS, right_arm):
-        msg.cmds.append(SetMotorPosition(name=motor_id, pos=float(val), spd=ARM_SPEED, cur=ARM_CURRENT))
+    for motor_id, val in zip(left_motor_ids, left_arm):
+        msg.cmds.append(SetMotorPosition(name=motor_id, pos=float(val), spd=arm_speed, cur=arm_current))
+    for motor_id, val in zip(right_motor_ids, right_arm):
+        msg.cmds.append(SetMotorPosition(name=motor_id, pos=float(val), spd=arm_speed, cur=arm_current))
     return msg
 
 
-def make_hand_msg(hand6) -> JointState:
-    """复用 Bridge2 (docker/ros2_deploy_bridge.py:251-263) 的 Inspire 修整逻辑。"""
-    pos = [float(np.clip(v, 0.0, 1.0)) for v in hand6]
-    pos = [v - 0.2 if v < 0.9 else v for v in pos]
-    pos = [round(v, 1) for v in pos]
+def make_hand_msg(hand6: list, cfg: dict) -> JointState:
+    """Build a JointState for hand control, applying hand-type clip logic."""
+    hand_type = cfg.get("hand_type", "inspire")
+    if hand_type == "inspire":
+        pos = inspire_clip_position(hand6)
+    else:
+        pos = [float(v) for v in hand6]
 
     msg = JointState()
-    msg.name = [str(i) for i in range(1, 7)]
+    msg.name = [str(i) for i in range(1, len(pos) + 1)]
     msg.position = pos
     return msg
 
@@ -167,18 +209,19 @@ def make_hand_msg(hand6) -> JointState:
 class MotorReplayNode:
     """ROS2 节点的包装。__init__ 内才创建底层 Node，避免模块导入期触发 ROS2。"""
 
-    def __init__(self, slices: Dict[str, slice]):
+    def __init__(self, slices: Dict[str, slice], cfg: dict):
         self._slices = slices
+        self._cfg = cfg
         self._node = Node("motor_replay_node")
-        self.arm_pub = self._node.create_publisher(CmdSetMotorPosition, "/arm/cmd_pos", 10)
-        self.left_hand_pub = self._node.create_publisher(JointState, "/inspire_hand/ctrl/left_hand", 10)
-        self.right_hand_pub = self._node.create_publisher(JointState, "/inspire_hand/ctrl/right_hand", 10)
+        self.arm_pub = self._node.create_publisher(CmdSetMotorPosition, cfg["topic_arm_cmd"], 10)
+        self.left_hand_pub = self._node.create_publisher(JointState, cfg["topic_left_hand_cmd"], 10)
+        self.right_hand_pub = self._node.create_publisher(JointState, cfg["topic_right_hand_cmd"], 10)
 
     def publish_frame(self, action26: np.ndarray) -> None:
         s = self._slices
-        self.arm_pub.publish(make_arm_msg(action26[s["left_arm"]], action26[s["right_arm"]]))
-        self.left_hand_pub.publish(make_hand_msg(action26[s["left_hand"]]))
-        self.right_hand_pub.publish(make_hand_msg(action26[s["right_hand"]]))
+        self.arm_pub.publish(make_arm_msg(action26[s["left_arm"]], action26[s["right_arm"]], self._cfg))
+        self.left_hand_pub.publish(make_hand_msg(action26[s["left_hand"]].tolist(), self._cfg))
+        self.right_hand_pub.publish(make_hand_msg(action26[s["right_hand"]].tolist(), self._cfg))
 
     def destroy(self):
         self._node.destroy_node()
@@ -194,11 +237,13 @@ def parse_args():
     p.add_argument("--end", type=int, default=-1, help="结束帧索引，-1 表示到末尾（默认 -1）")
     p.add_argument("--layout", choices=list(LAYOUTS), default=None,
                    help="强制指定 action 布局，缺省时自动从 info.json 推断")
+    p.add_argument("--config-file", type=str, default=None,
+                   help=f"桥接配置 JSON 文件路径（默认 {DEFAULT_CONFIG_FILE}）")
     p.add_argument("--dry-run", action="store_true", help="只打印不发布")
     return p.parse_args()
 
 
-def run_replay(args, actions: np.ndarray, slices: Dict[str, slice]) -> None:
+def run_replay(args, actions: np.ndarray, slices: Dict[str, slice], cfg: dict) -> None:
     """按 args.rate 频率回放 actions[start:end]。"""
     start = max(0, args.start)
     end = len(actions) if args.end < 0 else min(args.end, len(actions))
@@ -212,11 +257,12 @@ def run_replay(args, actions: np.ndarray, slices: Dict[str, slice]) -> None:
     else:
         _import_ros2()
         rclpy.init()
-        node = MotorReplayNode(slices)
+        node = MotorReplayNode(slices, cfg)
         time.sleep(1.0)  # 等 publisher 上线（沿用 reset.py 的做法）
 
     print(f"[replay] episode={args.episode} frames=[{start},{end}) "
-          f"total={end - start} rate={args.rate}Hz dry_run={args.dry_run}")
+          f"total={end - start} rate={args.rate}Hz dry_run={args.dry_run} "
+          f"config_file={args.config_file or DEFAULT_CONFIG_FILE}")
 
     try:
         next_t = time.monotonic()
@@ -249,6 +295,8 @@ def run_replay(args, actions: np.ndarray, slices: Dict[str, slice]) -> None:
 
 def main():
     args = parse_args()
+    cfg = load_bridge_config(args.config_file)
+
     try:
         actions, info = load_episode_actions(args.dataset, args.episode)
         if args.layout:
@@ -260,7 +308,7 @@ def main():
     except (FileNotFoundError, ValueError) as e:
         print(f"[replay] 错误: {e}", file=sys.stderr)
         sys.exit(1)
-    run_replay(args, actions, slices)
+    run_replay(args, actions, slices, cfg)
 
 
 if __name__ == "__main__":

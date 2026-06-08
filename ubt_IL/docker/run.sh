@@ -77,10 +77,6 @@ case "${1:-}" in
 
         echo "[INFO] Install completed (${ELAPSED}s)"
 
-        # 自动启动 Bridge2
-        echo "[INFO] Starting Bridge2..."
-        bash "$SCRIPT_DIR/run.sh" bridge-start
-
         echo ""
         echo "Next steps:"
         echo "  Enter container:  bash run.sh bash"
@@ -88,9 +84,6 @@ case "${1:-}" in
         echo "  Stop container:   bash run.sh stop"
         ;;
     stop)
-        # 先停 Bridge2
-        bash "$SCRIPT_DIR/run.sh" bridge-stop 2>/dev/null || true
-
         if sudo docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
             echo "[INFO] Stopping container '$CONTAINER_NAME'..."
             sudo docker stop "$CONTAINER_NAME"
@@ -131,71 +124,6 @@ case "${1:-}" in
             echo "[INFO] Container '$CONTAINER_NAME' removed."
         else
             echo "[WARN] Container '$CONTAINER_NAME' does not exist."
-        fi
-        ;;
-    bridge-start)
-        if ! sudo docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-            echo "[ERROR] Container '$CONTAINER_NAME' is not running!"
-            exit 1
-        fi
-        # 检查是否已在运行
-        BRIDGE_PID=$(sudo docker exec "$CONTAINER_NAME" pgrep -f "ros2_deploy_bridge.py" 2>/dev/null || true)
-        if [ -n "$BRIDGE_PID" ]; then
-            echo "[WARN] Bridge2 already running (PID=$BRIDGE_PID)"
-            exit 0
-        fi
-
-        echo "[INFO] Starting Bridge2..."
-        echo "[INFO]   ZMQ SUB :5559 (actions <- LeRobot)"
-        echo "[INFO]   ZMQ PUB :5560 (status -> LeRobot)"
-
-        sudo docker exec -d "$CONTAINER_NAME" bash -c "\
-            source /opt/ros/humble/setup.bash && \
-            export ROS_DOMAIN_ID=$DOMAIN_ID && \
-            export FASTRTPS_DEFAULT_PROFILES_FILE=/opt/fastdds_no_shm.xml && \
-            /usr/bin/python3 $BRIDGE_SCRIPT \
-                --zmq_cmd_port 5559 --zmq_status_port 5560"
-
-        sleep 2
-        BRIDGE_PID=$(sudo docker exec "$CONTAINER_NAME" pgrep -f "ros2_deploy_bridge.py" 2>/dev/null || true)
-        if [ -n "$BRIDGE_PID" ]; then
-            echo "[INFO] Bridge2 started (PID=$BRIDGE_PID)"
-        else
-            echo "[ERROR] Bridge2 failed to start!"
-            echo "[INFO] Check logs: sudo docker logs $CONTAINER_NAME"
-            exit 1
-        fi
-        ;;
-    bridge-stop)
-        if ! sudo docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-            echo "[WARN] Container '$CONTAINER_NAME' is not running."
-            exit 0
-        fi
-        BRIDGE_PID=$(sudo docker exec "$CONTAINER_NAME" pgrep -f "ros2_deploy_bridge.py" 2>/dev/null || true)
-        if [ -z "$BRIDGE_PID" ]; then
-            echo "[WARN] Bridge2 is not running."
-            exit 0
-        fi
-
-        echo "[INFO] Stopping Bridge2 (PID=$BRIDGE_PID)..."
-        sudo docker exec "$CONTAINER_NAME" pkill -SIGTERM -f "ros2_deploy_bridge.py"
-        sleep 1
-
-        # 强制终止
-        BRIDGE_PID=$(sudo docker exec "$CONTAINER_NAME" pgrep -f "ros2_deploy_bridge.py" 2>/dev/null || true)
-        if [ -n "$BRIDGE_PID" ]; then
-            echo "[WARN] Force killing Bridge2..."
-            sudo docker exec "$CONTAINER_NAME" pkill -SIGKILL -f "ros2_deploy_bridge.py"
-            sleep 1
-        fi
-
-        # 最终验证
-        BRIDGE_PID=$(sudo docker exec "$CONTAINER_NAME" pgrep -f "ros2_deploy_bridge.py" 2>/dev/null || true)
-        if [ -z "$BRIDGE_PID" ]; then
-            echo "[INFO] Bridge2 stopped."
-        else
-            echo "[ERROR] Failed to stop Bridge2! (PID: $BRIDGE_PID)"
-            exit 1
         fi
         ;;
     check)
@@ -260,15 +188,6 @@ case "${1:-}" in
             ((ERRORS++))
         fi
 
-        # Bridge2 进程
-        BRIDGE_PID=$(sudo docker exec "$CONTAINER_NAME" pgrep -f "ros2_deploy_bridge.py" 2>/dev/null || true)
-        if [ -n "$BRIDGE_PID" ]; then
-            echo "[OK] Bridge2: running (PID=$BRIDGE_PID)"
-        else
-            echo "[WARN] Bridge2: not running (start: bash run.sh bridge-start)"
-            ((WARNINGS++))
-        fi
-
         # 网络
         NET=$(sudo docker inspect --format='{{.HostConfig.NetworkMode}}' "$CONTAINER_NAME" 2>/dev/null || echo "unknown")
         if [ "$NET" == "host" ]; then
@@ -291,17 +210,15 @@ case "${1:-}" in
         echo "=========================================="
         ;;
     *)
-        echo "Usage: $0 {build|start|stop|restart|bash|rm|bridge-start|bridge-stop|check}"
+        echo "Usage: $0 {build|start|stop|restart|bash|rm|check}"
         echo ""
         echo "Commands:"
         echo "  build         Build the Docker image"
         echo "  start         Create and/or start the container (idempotent)"
-        echo "  stop          Stop the container (and bridge)"
+        echo "  stop          Stop the container"
         echo "  restart       Restart the container"
         echo "  bash          Enter the container shell (with ROS2 env)"
         echo "  rm            Remove the container"
-        echo "  bridge-start  Start Bridge2 inside container"
-        echo "  bridge-stop   Stop Bridge2 inside container"
         echo "  check         Verify container environment"
         exit 1
         ;;

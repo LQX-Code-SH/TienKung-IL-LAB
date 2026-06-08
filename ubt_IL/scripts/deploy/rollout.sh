@@ -1,7 +1,7 @@
 #!/bin/bash
 # 天工机器人部署（rollout）脚本
 # 在 lerobot-tienkung 容器内运行
-# 前置条件：Bridge2 已启动（bash run.sh bridge-start 或 /usr/bin/python3 /opt/ros2_deploy_bridge.py）
+# 前置条件：Bridge2 已启动（由 TienKungRobot.connect() 自动启动，或手动 /usr/bin/python3 /ubt_IL/tienkung/ros2_deploy_bridge.py）
 set -e
 
 # === 配置 ===
