@@ -10,7 +10,8 @@ STRATEGY="${STRATEGY:-base}"
 FPS="${FPS:-15}"
 DURATION="${DURATION:-60}"
 TASK="${TASK:-pick and place}"
-ZMQ_HOST="${ZMQ_HOST:-192.168.41.99}"
+# ZMQ_HOST="${ZMQ_HOST:-192.168.41.2}" # 真机地址
+ZMQ_HOST="${ZMQ_HOST:-127.0.0.1}" # 仿真器地址
 
 cd /ubt_IL/lerobot
 
@@ -18,7 +19,7 @@ cd /ubt_IL/lerobot
     --strategy.type="$STRATEGY" \
     --policy.path="$POLICY_PATH" \
     --robot.type=tienkung \
-    --robot.bridge_enabled=false \
+    --robot.bridge_enabled=true \
     --robot.cameras="{camera_head: {type: image_server, server_address: '${ZMQ_HOST}', port: 5558, offset_x: 0, width: 640, height: 360, fps: $FPS, display: true}}" \
     --task="$TASK" \
     --fps="$FPS" \

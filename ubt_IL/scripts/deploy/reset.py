@@ -65,11 +65,11 @@ class MotorResetNode(Node):
         hand_open = h([1, 1, 1, 1, 1, 0])
         self.push("hand", hand_open, side="right")
         self.push("hand", hand_open, side="left")
-        self.push("arm", [c(12, 1.5), c(22, -1.5)])
-        sleep(1)
-        self.push("arm", [c(14, -1.5), c(24, -1.5)])
+        self.push("arm", [c(22, -1.5)])
+        sleep(3)
+        self.push("arm", [c(24, -1.5)])
         sleep(2)
-        self.push("arm", cArr(left_handPos, 11) + cArr(right_hanPos, 21))
+        self.push("arm", cArr(right_hanPos, 21))
         self.get_logger().info("Reset commands published to /arm/cmd_pos, /head/cmd_pos, and both hands")
 
 
